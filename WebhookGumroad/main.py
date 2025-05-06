@@ -1,7 +1,7 @@
 from flask import Flask, request
 import requests
 import pytz
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections import defaultdict
 
 app = Flask(__name__)
@@ -10,9 +10,12 @@ app = Flask(__name__)
 TELEGRAM_BOT_TOKEN = '7789798585:AAEv3QL9S2DZUTVYelRTaMXYLLuZrdz-kt0'
 CHAT_ID = '6744699088'
 
-# Günlük satış sayacı
+# Zaman dilimi
+tz = pytz.timezone('Europe/Istanbul')
+
+# Satış verisi ve başlangıç zamanı
 sales_data = {
-    'date': datetime.now().strftime('%Y-%m-%d'),
+    'start_time': datetime.now(tz),
     'total_sales': 0,
     'total_revenue': 0.0,
     'products': defaultdict(lambda: {
@@ -21,19 +24,16 @@ sales_data = {
     })
 }
 
-
 # Telegram mesajı göndermek için fonksiyon
 def send_telegram_message(text):
     url = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage'
     payload = {'chat_id': CHAT_ID, 'text': text}
     requests.post(url, data=payload)
 
-
 # Ana sayfa
 @app.route('/')
 def home():
     return 'Hoş Geldiniz! Webhook, /gumroad-webhook ile aktif.'
-
 
 # Webhook
 @app.route('/gumroad-webhook', methods=['POST'])
@@ -46,15 +46,13 @@ def gumroad_webhook():
     price_cents = int(data.get('price', '0'))
     price_dollars = price_cents / 100
 
-    tz = pytz.timezone('Europe/Istanbul')
     now = datetime.now(tz)
-    now_date = now.strftime('%Y-%m-%d')
-    now_time = now.strftime('%H:%M:%S')
+    now_str = now.strftime('%Y-%m-%d %H:%M:%S')
 
-    # Gün değiştiyse sayaçları sıfırla
-    if sales_data['date'] != now_date:
+    # Eğer 24 saat geçtiyse sıfırla
+    if now - sales_data['start_time'] >= timedelta(hours=24):
         sales_data = {
-            'date': now_date,
+            'start_time': now,
             'total_sales': 0,
             'total_revenue': 0.0,
             'products': defaultdict(lambda: {
@@ -69,6 +67,13 @@ def gumroad_webhook():
     sales_data['products'][product]['count'] += 1
     sales_data['products'][product]['revenue'] += price_dollars
 
+    # Kalan süreyi hesapla
+    reset_time = sales_data['start_time'] + timedelta(hours=24)
+    time_left = reset_time - now
+    hours, remainder = divmod(int(time_left.total_seconds()), 3600)
+    minutes, seconds = divmod(remainder, 60)
+    time_left_str = f"{hours} saat {minutes} dakika {seconds} saniye"
+
     # Ürün bazlı liste oluştur
     product_lines = ""
     for prod, stats in sales_data['products'].items():
@@ -78,17 +83,17 @@ def gumroad_webhook():
                f"📦 Ürün: {product}\n"
                f"👤 Müşteri: {email}\n"
                f"💰 Tutar: ${price_dollars:.2f}\n"
-               f"🕒 Zaman: {now_time}\n"
-               f"📅 Tarih: {now_date}\n\n"
-               f"📊 Günlük Satış Özeti:\n"
+               f"🕒 Zaman: {now.strftime('%H:%M:%S')}\n"
+               f"📅 Tarih: {now.strftime('%Y-%m-%d')}\n\n"
+               f"📊 24 Saatlik Satış Özeti:\n"
                f"Toplam Satış: {sales_data['total_sales']}\n"
                f"Toplam Gelir: ${sales_data['total_revenue']:.2f}\n"
-               f"Ürünler:\n{product_lines}")
+               f"Ürünler:\n{product_lines}"
+               f"⏳ Sıfırlamaya Kalan Süre: {time_left_str}")
 
     send_telegram_message(message)
 
     return 'OK'
-
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=3000)
